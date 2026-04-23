@@ -1374,3 +1374,104 @@ kable(implications,
 ## Concluding Remarks
 
 This project demonstrates the application of quantitative portfolio analysis techniques---including return estimation, mean-variance optimization, risk budgeting, and capital allocation---to a practical investment universe. The results highlight both the power and the limitations of these methods: while they provide a rigorous framework for evaluating risk-return tradeoffs, they are sensitive to estimation error, model assumptions, and the specific historical period analyzed. **The analytical framework presented here is intended as a demonstration of portfolio-theory techniques, not as investment advice.**
+
+# Appendix: VaR Coverage & Realized Drawdowns
+
+This appendix tests whether the parametric (normal-distribution) VaR estimates held up against realized losses, and documents the maximum realized drawdowns for each ETF. Two caveats shape the interpretation.
+
+First, single-period VaR and cumulative max drawdown answer different questions: VaR bounds the expected worst single-month loss at a given confidence level, while max drawdown measures cumulative peak-to-trough decline across multiple periods. By construction, max drawdown is at least as severe as the worst single-month loss, so the two quantities are not directly comparable.
+
+Second, with only 60 monthly observations the statistical power to reject a given VaR calibration is low: a correctly-calibrated 5% VaR expects 3 breaches on average, and deviations of $\pm 2$ breaches from that expectation fall well within sampling noise. The Kupiec likelihood-ratio test provides a formal coverage statistic, but its conclusions at this sample size are descriptive rather than definitive. The 1% VaR test is omitted entirely: with an expected breach count of 0.6, observed breach counts of 0, 1, or 2 carry essentially no inferential information.
+
+## 5% Value-at-Risk Coverage Test
+
+```{r appendix-kupiec}
+# Kupiec proportion-of-failures likelihood-ratio test
+kupiec_pof <- function(x, N, p = 0.05) {
+  if (x == 0) {
+    lr <- -2 * N * log(1 - p)
+  } else if (x == N) {
+    lr <- -2 * N * log(p)
+  } else {
+    phat <- x / N
+    lr <- -2 * (x * log(p) + (N - x) * log(1 - p) -
+                x * log(phat) - (N - x) * log(1 - phat))
+  }
+  list(LR = lr, p_value = 1 - pchisq(lr, df = 1))
+}
+
+N_obs <- nrow(projectReturns)
+expected_breaches <- 0.05 * N_obs
+
+coverage <- do.call(rbind, lapply(colnames(ret.mat), function(sym) {
+  r <- ret.mat[, sym]
+  mu <- mean(r); sd_r <- sd(r)
+  var_thresh <- mu + sd_r * qnorm(0.05)          # parametric 5% VaR (return)
+  actual <- sum(r < var_thresh)
+  kup <- kupiec_pof(actual, N_obs, p = 0.05)
+  worst_idx <- which.min(r)
+  worst_ret <- r[worst_idx]
+  worst_date <- format(index(projectReturns)[worst_idx], "%Y-%m")
+  data.frame(
+    ETF             = sym,
+    `5% VaR (%)`    = round(var_thresh * 100, 2),
+    `Expected`      = expected_breaches,
+    `Actual`        = actual,
+    `Kupiec p-val`  = round(kup$p_value, 3),
+    `Worst (%)`     = round(worst_ret * 100, 2),
+    `Worst Month`   = worst_date,
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}))
+
+kable(coverage,
+      caption = "5% Normal VaR Coverage Test (N = 60 months)",
+      row.names = FALSE)
+```
+
+The Kupiec test evaluates the null hypothesis that the observed breach rate equals the assumed 5%. A p-value below 0.05 would indicate the parametric VaR is miscalibrated for that ETF; p-values above 0.05 indicate the observed breach count is statistically consistent with correct calibration. Given the low sample power, most p-values should be read as "the data cannot distinguish correct calibration from mild miscalibration." The "Worst (%)" column reports the single worst monthly return observed, to contextualize how the parametric tail estimate compared to the realized extreme.
+
+## Realized Maximum Drawdowns
+
+```{r appendix-drawdowns}
+# Coerce yearmon index to Date so PerformanceAnalytics can parse it
+returns_dated <- xts(coredata(projectReturns),
+                     order.by = as.Date(index(projectReturns)))
+
+dd_table <- do.call(rbind, lapply(colnames(returns_dated), function(sym) {
+  dd <- PerformanceAnalytics::table.Drawdowns(returns_dated[, sym, drop = FALSE], top = 1)
+  data.frame(
+    ETF             = sym,
+    `Max DD (%)`    = round(dd$Depth * 100, 2),
+    `Peak`          = format(as.Date(dd$From), "%Y-%m"),
+    `Trough`        = format(as.Date(dd$Trough), "%Y-%m"),
+    `Duration (mo)` = dd$`To Trough`,
+    `Recovered By`  = ifelse(is.na(dd$To), "Not recovered",
+                             format(as.Date(dd$To), "%Y-%m")),
+    check.names = FALSE,
+    stringsAsFactors = FALSE
+  )
+}))
+
+kable(dd_table,
+      caption = "Maximum Drawdowns by ETF",
+      row.names = FALSE)
+```
+
+Duration (months from peak to trough) captures the *persistence* of a drawdown, which the magnitude alone does not. A shallow but long-lived drawdown reflects a different risk experience than a sharp, quickly-reversed one. BND's drawdown profile is especially notable in this dimension: the 2022 rate-hike cycle produced a sustained multi-month decline rather than a single sharp drop, making realized duration — not depth — the defining feature of the bond experience in this sample.
+
+## Underwater Drawdown Chart
+
+```{r appendix-underwater, fig.height=5, fig.width=10}
+par(bg = "white", mar = c(4, 4, 3, 1))
+PerformanceAnalytics::chart.Drawdown(
+  returns_dated,
+  legend.loc = "bottomleft",
+  colorset = unname(colors.pro),
+  lwd = 2,
+  main = "Underwater Chart: Cumulative Drawdowns"
+)
+```
+
+The underwater chart visualizes the full drawdown path for each ETF: each series traces cumulative decline from its running peak, returning to zero only when a new high is reached. Compared to the single-worst-drawdown table above, the chart reveals whether drawdowns were concentrated in one episode or spread across multiple smaller declines, and how quickly each ETF recovered after trough.
