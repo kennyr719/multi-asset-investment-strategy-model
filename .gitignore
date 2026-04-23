@@ -1,0 +1,19 @@
+# R session artifacts
+.RData
+.Rhistory
+.Rapp.history
+.Rproj.user/
+
+# knitr / rmarkdown intermediates
+*_cache/
+*_files/
+*.knit.md
+*.utf8.md
+*.tex
+*.log
+*.aux
+*.out
+*.toc
+
+# macOS
+.DS_Store

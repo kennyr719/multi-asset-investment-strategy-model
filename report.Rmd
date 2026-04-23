@@ -1,0 +1,1376 @@
+---
+title: "Multi-Asset Investment Strategy Model"
+subtitle: "Quantitative Portfolio Analysis of Vanguard ETFs"
+author: "Zhongqi (Kenny) Ren"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 2
+    highlight: tango
+  html_document:
+    toc: true
+    toc_depth: 2
+    theme: flatly
+---
+
+```{r setup, echo=FALSE, message=FALSE, warning=FALSE}
+# Global options - set echo=FALSE for all chunks
+knitr::opts_chunk$set(echo = FALSE, message = FALSE, warning = FALSE)
+options(digits=3, width=70)
+
+# load packages
+suppressPackageStartupMessages(library(IntroCompFinR))
+suppressPackageStartupMessages(library(PerformanceAnalytics))
+suppressPackageStartupMessages(library(quantmod))
+suppressPackageStartupMessages(library(boot))
+suppressPackageStartupMessages(library(corrplot))
+suppressPackageStartupMessages(library(xtable))
+suppressPackageStartupMessages(library(knitr))
+suppressPackageStartupMessages(library(lubridate))
+suppressPackageStartupMessages(library(tidyverse))
+suppressPackageStartupMessages(library(gridExtra))
+
+# load project helper functions
+source("R/data_loading.R")
+source("R/portfolio_optimization.R")
+source("R/risk_metrics.R")
+
+# Professional color palette for equity research style
+colors.pro <- c(
+  VTI = "#003366",    # Navy blue
+  BND = "#8B0000",    # Dark red
+  VEA = "#2E8B57",    # Sea green
+  VWO = "#B8860B",    # Dark goldenrod
+  VIG = "#4B0082"     # Indigo
+)
+
+resetPar = par()
+```
+
+```{r data-retrieval, cache=TRUE}
+last.date = as.Date("2025-04-01")
+first.date = last.date - years(5)
+project.symbols = c("VTI","BND","VEA","VWO","VIG")
+projectPrices = load_etf_prices(project.symbols, first.date, last.date)
+```
+
+# Executive Summary
+
+## Data set
+
+This project uses data collected from finance.yahoo.com and analyzes monthly closing price ranging from the end of April 2020 through the end of April 2025.
+
+## ETF Descriptions:
+
+### US Stocks. Vanguard Total Stock Market ETF (VTI)
+
+VTI seeks to broadly replicate the performance of the entire U.S. equity market, spanning large-, mid-, small-, and micro-cap companies listed on the NYSE and Nasdaq. Rather than holding every single share, it "samples" the underlying CRSP U.S. Total Market Index—owning a diversified basket of stocks chosen to closely mirror the index's overall sector and size characteristics. This sampling approach delivers exposure to nearly 100% of the investable U.S. stock universe in a single, low-cost fund.
+
+### US Bonds. Vanguard Total Bond Index ETF (BND)
+
+BND tracks the Bloomberg U.S. Aggregate Float Adjusted Index, which covers investment-grade, U.S. dollar–denominated fixed-income securities across government, corporate, mortgage-backed, and asset-backed sectors—all with maturities exceeding one year. Using a sampling methodology, BND holds a representative cross-section of these bonds to match the index's risk and return profile, and it maintains at least 80% of its assets in securities included in the benchmark.
+
+### Foreign Developed Stocks. Vanguard FTSE Developed Markets ETF (VEA)
+
+VEA aims to mirror the FTSE Developed All Cap ex U.S. Index, a market-cap-weighted measure of stocks from major developed markets outside the U.S. This includes large, mid, and small caps across Canada, Europe, and the Pacific region. The fund pursues full replication, investing in nearly every constituent of the index in proportion to its weight, to capture broad exposure to non-U.S. developed-market equities.
+
+### Emerging market stocks. Vanguard FTSE Emerging Markets ETF (VWO)
+
+VWO targets the FTSE Emerging Markets All Cap China A Inclusion Index, which tracks the performance of companies in developing economies worldwide—including an expanded weighting for on-shore China A-shares. The ETF uses a sampling approach to build a diversified portfolio that reflects the index's country and sector breakdowns, providing access to the growth potential of emerging-market equities.
+
+### Dividend Growth Stocks. Vanguard Dividend Appreciation ETF (VIG)
+
+VIG follows the NASDAQ US Dividend Achievers Select Index, composed of U.S. companies with a proven track record of increasing their dividends year over year. The fund holds each qualifying stock in roughly the same proportion as its index weighting, offering investors a concentrated yet diversified sleeve of high-quality firms known for consistent dividend growth.
+
+## Main Findings
+
+-   **Global Events Drove Major Drawdowns and Recoveries**: The COVID-19 pandemic in March 2020 triggered a market crash of over 10% across all stock ETFs; later from 2022–2023, the Federal Reserve's rate-hike cycle again spiked volatility and weighed on both bond and equity returns before markets eventually stabilized.
+
+-   **US Equities Outperformed**: Vanguard Total Stock Market ETF (VTI) delivered the highest average monthly return (1.29%) and terminal wealth, reflecting the relative strength of the US economy compared to international (VEA) and emerging markets (VWO).
+
+-   **Risk-Free Asset Outperformed Bonds**: A distinct market anomaly was observed where the Risk-Free Asset (0.33% monthly mean return) consistently outperformed the bond market (BND mean return –0.05%). With the risk-free asset offering superior returns at zero volatility, traditional fixed-income allocations were rendered mathematically inefficient.
+
+-   **International Diversification Added Volatility, Not Return**: VEA (developed-markets) and VWO (emerging-markets) recorded the highest monthly volatilities, respectively 4.77% and 4.32%, reflecting greater geopolitical and currency risk for markets outside the U.S but has shown signs of recovery strength in the last few months.
+
+-   **Breakdown of the Bond Hedge**: The traditional negative correlation between stocks and bonds collapsed. The 24-month rolling correlation between VTI and BND remained strongly positive (0.50–0.80) during the rate-hike cycle, meaning bonds failed to provide their theoretical diversification benefits during equity drawdowns.
+
+-   **High Correlation Among Equities**: The four equity ETFs (VTI, VEA, VWO, VIG) showed very high pairwise correlations, limiting the effectiveness of pure equity diversification during global stress events.
+
+-   **U.S. Equities Lead on Risk-Adjusted Returns**: VTI and VIG achieved the highest monthly Sharpe ratios (0.21 and 0.20) -- 0.71 and 0.68 respectively when annualized, indicating US equity market's dominant performance over international equity market and bond ETFs.
+
+-   **Optimization Rejected "Naive" Diversification**: The mean-variance optimization model produced a highly concentrated portfolio (~89% VTI, ~11% VIG) for the tangible efficient frontier. This acts as a quantitative rejection of "naive" global diversification for this period, prioritizing US-centric exposure over underperforming international assets.
+
+-   **GMVP Showed Practical Drawback**: The Global Minimum Variance Portfolio (5-ETF) yielded a return lower than the risk-free rate. This confirmed that in an environment where bonds and stocks correlate positively and bonds yield negative real returns, holding the risk-free asset is the optimal strategy for risk minimization.
+
+-   **VaR Highlights Bond Safety and Equity Downside**: BND had the lowest Value-at-Risk at both 1% and 5% while VEA demonstrated the highest potential downside losses across both normal and empirical estimation methods, confirming the "fat tail" risk in international equities.
+
+-   **Rolling Statistics Remained Stable**: Rolling estimates of means and volatilities remained largely stable throughout the 24-month window despite slight fluctuation in 2022–2023 when Fed signaled interest rate hikes, supporting the working assumption of covariance stationarity for the optimization framework.
+
+-   **Capital Allocation $\neq$ Risk Allocation**: In the equally-weighted equity ETF portfolio (25% each), VEA and VTI contribute more risks compared to their respective percentages of capital allocated (25%), whereas VWO and VIG contribute less, highlighting the need for risk-parity approaches over simple capital weighting.
+
+```{r}
+# calculate simple monthly returns
+projectReturns = na.omit(Return.calculate(projectPrices, method = "discrete"))
+ret.mat = coredata(projectReturns) #simple returns matrix
+ret.df <- data.frame(ret.mat) # simple returns data frame
+```
+
+# Return Calculations and Sample Statistics
+
+## Monthly Prices
+
+```{r, fig.height=8, fig.width=10}
+par(mfrow = c(3, 2), mar = c(4, 4, 3, 1), bg = "white")
+for (i in 1:5) {
+  plot(index(projectPrices), as.numeric(projectPrices[, i]), 
+       type = "l", lwd = 2, col = colors.pro[i],
+       main = paste(project.symbols[i], "Monthly Prices"),
+       xlab = "Date", ylab = "Price ($)",
+       panel.first = grid(col = "gray90", lty = 1))
+}
+par(mfrow = c(1, 1))
+```
+
+## Monthly Returns
+
+```{r, fig.height=8, fig.width=10}
+par(mfrow = c(3, 2), mar = c(4, 4, 3, 1), bg = "white")
+for (i in 1:5) {
+  plot(index(projectReturns), as.numeric(projectReturns[, i]), 
+       type = "l", lwd = 1.5, col = colors.pro[i],
+       main = paste(project.symbols[i], "Monthly Returns"),
+       xlab = "Date", ylab = "Return",
+       panel.first = grid(col = "gray90", lty = 1))
+  abline(h = 0, lty = 2, col = "gray50")
+  abline(h = mean(projectReturns[, i]), lty = 2, col = colors.pro["BND"], lwd = 1.5)
+}
+par(mfrow = c(1, 1))
+```
+
+The four equity ETFs—VTI, VIG, VEA, and VWO—exhibit synchronized movements, spiking and dipping together albeit at different magnitudes. For instance, all experienced significant volatility during key periods: early 2022 saw returns impacted by the Russia-Ukraine conflict and the Federal Reserve signaling rate hikes amid worsening inflation; late 2022, when Fed Chairman Powell indicated a series of rate increases, produced a brief dip followed by a sharp rebound.
+
+In contrast, BND—which tracks the U.S. bond market—remained relatively stable around its mean, with notable exceptions in mid-2022 when the Fed shifted to a sustained tightening cycle, causing bond yields to rise (and prices to fall) and producing negative returns. A smaller dip occurred in late 2023 when markets anticipated continued rate pressure.
+
+## Equity curve
+
+```{r, fig.height=5, fig.width=10}
+par(bg = "white", mar = c(4, 4, 3, 1))
+cum.returns <- cumprod(1 + projectReturns)
+
+plot(index(cum.returns), as.numeric(cum.returns[, 1]), type = "l", lwd = 2.5,
+     col = colors.pro[1], ylim = c(0.8, 2.5),
+     main = "Growth of $1 Investment",
+     xlab = "Date", ylab = "Portfolio Value ($)",
+     panel.first = grid(col = "gray90", lty = 1))
+
+for (i in 2:5) {
+  lines(index(cum.returns), as.numeric(cum.returns[, i]), 
+        lwd = 2.5, col = colors.pro[i])
+}
+abline(h = 1, lty = 2, col = "gray50")
+
+legend("topleft", legend = project.symbols, 
+       col = colors.pro, lwd = 2.5, bty = "n", cex = 0.9)
+```
+
+The equity curves illustrate how a \$1 investment in May 2020 would have grown by April 2025: VTI leads with a terminal value of approximately \$2.09, followed by VIG (\$1.92), VEA (\$1.73), VWO (\$1.53), and BND (\$0.97). This ordering reflects U.S. equities outpacing international markets over the sample period. The underperformance of VEA and VWO likely reflects both the relative strength of the US economy and currency headwinds, as a strengthening US Dollar during the Federal Reserve’s tightening cycle reduced the realized returns of non-US assets when converted back to USD. BND delivered essentially flat performance, reflecting the negative impact of the Federal Reserve's 2022 rate hikes on bond prices.
+
+## Normality of Monthly Simple Returns
+
+This section leverages four panel plots which consist of histograms, boxplots, qq-plots, and SACFs to evaluate whether the returns for the 5 ETFs are normally distributed.
+
+```{r}
+fourPanelPlot(projectReturns[, "VTI", drop=FALSE])
+fourPanelPlot(projectReturns[, "BND", drop=FALSE])
+fourPanelPlot(projectReturns[, "VEA", drop=FALSE])
+fourPanelPlot(projectReturns[, "VWO", drop=FALSE])
+fourPanelPlot(projectReturns[, "VIG", drop=FALSE])
+```
+
+```{r, fig.height=5, fig.width=10}
+par(bg = "white")
+boxplot(coredata(projectReturns), main="Vanguard ETF Returns Distribution", 
+        col=colors.pro, border="gray30", las = 1)
+abline(h = 0, lty = 2, col = "gray50")
+```
+
+The ACF plots indicate no significant linear time dependence in returns, while the QQ-plots suggest approximate normality with slight fat tails for VWO and VEA. This deviation indicates that extreme events, both positive and negative, occur more frequently than a normal distribution would predict, which is a standard characteristic of emerging market equities. From the boxplot which offer comprehensive visualizations of the return distributions, equity ETFs display wider spreads compared to BND, with few outliers evident except for isolated observations in BND, VEA, and VWO.
+
+## Univariate Descriptive Statistics
+
+```{r}
+muhat.vals = apply(projectReturns, 2, mean)
+muhat.mat = as.matrix(muhat.vals)
+sigmahat.vals = apply(projectReturns, 2, sd)
+skew.vals = apply(projectReturns, 2, skewness)
+ekurt.vals = apply(projectReturns, 2, kurtosis)
+cov.mat = var(projectReturns)
+cor.mat = cov2cor(cov.mat)
+
+covhat.vals = cov.mat[lower.tri(cov.mat)]
+rhohat.vals = cor.mat[lower.tri(cor.mat)]
+names(covhat.vals) <- names(rhohat.vals) <- 
+  c("VTI,BND","VTI,VEA","VTI,VWO", "VTI,VIG",
+    "BND,VEA", "BND,VWO", "BND,VIG", "VEA,VWO",
+    "VEA,VIG", "VWO,VIG")
+    
+
+# empirical quantiles for VaR calculations
+q.vals = apply(projectReturns, 2, quantile, prob=c(0.01,0.05))
+
+# display results in a table
+stats.mat = rbind(muhat.vals, 
+                  sigmahat.vals,
+                  skew.vals,
+                  ekurt.vals,
+                  q.vals)
+rownames(stats.mat) = c("Mean", "Std Dev", "Skewness", 
+                        "Excess Kurtosis", "1% Quantile", 
+                        "5% Quantile")
+kable(stats.mat, caption = "Monthly Return Statistics", digits = 4)
+```
+
+```{r}
+# Which ETFs have the highest and lowest average return? Which ETFs have the highest and lowest standard deviation?
+# Get the idex of the ETFs with the largest / smallest average return and standard deviation
+max_mu_idx = which.max(muhat.vals)
+min_mu_idx = which.min(muhat.vals)
+max_sd_idx = which.max(sigmahat.vals)
+min_sd_idx = which.min(sigmahat.vals)
+
+summary_stats <- data.frame(
+  Metric = c("Highest Mean Return", "Lowest Mean Return", 
+             "Highest Std Dev", "Lowest Std Dev"),
+  ETF = c(names(muhat.vals)[max_mu_idx],
+          names(muhat.vals)[min_mu_idx],
+          names(sigmahat.vals)[max_sd_idx],
+          names(sigmahat.vals)[min_sd_idx]),
+  Value = c(muhat.vals[max_mu_idx],
+            muhat.vals[min_mu_idx],
+            sigmahat.vals[max_sd_idx],
+            sigmahat.vals[min_sd_idx])
+)
+
+kable(summary_stats, caption = "Extreme Statistics Summary", digits = 4)
+```
+
+From the descriptive statistics, VTI exhibits the highest monthly standard deviation at 4.80%, with VEA nearly identical at 4.79%, while **BND** has the lowest standard deviation of 0.0185 (1.85%).
+
+In terms of distributional shape, BND appears most normally distributed (skewness = 0.1384, excess kurtosis = –0.0914), whereas VWO shows the greatest departure from normality (skewness = 0.38, excess kurtosis = 0.73).
+
+## x-y plot (Risk return plot):
+
+```{r, fig.height=5, fig.width=8}
+rf = 0.04/12
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot(sigmahat.vals, muhat.vals, xlim=c(0, 0.06), ylim=c(-0.001, 0.015),
+     ylab="Expected Return", xlab="Standard Deviation",
+     cex=2.5, pch=16, col=colors.pro,
+     main = "Risk-Return Tradeoff",
+     panel.first = grid(col = "gray90", lty = 1))
+points(0, rf, cex=2, pch=18, col="darkgreen")
+text(0, rf, labels="Rf", pos=4, font = 2)
+text(sigmahat.vals, muhat.vals, labels=colnames(projectReturns), pos=3, font = 2)
+abline(h=0, lty = 2, col = "gray50")
+legend("bottomright", legend = project.symbols, col = colors.pro, 
+       pch = 16, pt.cex = 1.5, bty = "n", cex = 0.8)
+```
+
+The plot illustrates a clearly positive relationship between risk (measured by standard deviation) and expected return across the five ETFs -- VTI, VEA, and VIG all exhibit higher volatility and higher average returns, compared to BND which has the lowest volatility and also the lowest return. This trend is consistent with the risk-return tradeoff observed in financial markets — assets with higher expected returns tend to have higher risks.
+
+## Standard Error and 95% Confidence Interval
+
+```{r}
+t <- nrow(projectReturns)
+
+# Standard Error of estimated mean return and standard deviation
+se.muhat.vals <- sigmahat.vals / sqrt(t)
+se.sigmahat.vals <- sigmahat.vals / sqrt(2 * t)
+
+# 95% Confidence Interval for estimated mean return
+mu.lower.95 <- muhat.vals - 2 * se.muhat.vals
+mu.upper.95 <- muhat.vals + 2 * se.muhat.vals
+
+ci_mean <- data.frame(
+  ETF = names(muhat.vals),
+  Estimate = muhat.vals,
+  SE = se.muhat.vals,
+  Lower_95 = mu.lower.95,
+  Upper_95 = mu.upper.95
+)
+kable(ci_mean, caption = "Mean Return Estimates with 95% CI", digits = 4, row.names = FALSE)
+
+# 95% Confidence Interval for estimated standard deviation
+sd.lower.95 <- sigmahat.vals - 2 * se.sigmahat.vals
+sd.upper.95 <- sigmahat.vals + 2 * se.sigmahat.vals
+
+ci_sd <- data.frame(
+  ETF = names(sigmahat.vals),
+  Estimate = sigmahat.vals,
+  SE = se.sigmahat.vals,
+  Lower_95 = sd.lower.95,
+  Upper_95 = sd.upper.95
+)
+kable(ci_sd, caption = "Std Dev Estimates with 95% CI", digits = 4, row.names = FALSE)
+```
+
+The 95% confidence intervals reveal substantial estimation uncertainty for mean returns---the interval widths are comparable to the point estimates themselves, reflecting the inherent difficulty of precisely estimating expected returns from limited samples. Standard deviation estimates, by contrast, are more precisely estimated, with confidence intervals representing a much smaller fraction of the point estimates.
+
+## Monthly Sharpe ratios
+
+```{r}
+SharpeRatios = (muhat.vals - rf)/sigmahat.vals # rf = 0.00333
+SharpeRatios = as.matrix(SharpeRatios, ncol=1)
+kable(SharpeRatios, caption = "Monthly Sharpe Ratios", digits = 4, col.names = "Sharpe Ratio")
+```
+
+## Bootstrap Monthly Sharpe Ratios
+
+```{r}
+# Bootstrap Sharpe ratio helpers (sharpeRatio.boot, computeSEconfintSharpe)
+# are sourced from R/risk_metrics.R.
+set.seed(123)
+Sharpe.boot.VTI = computeSEconfintSharpe(ret.mat[, "VTI", drop=FALSE], risk.free=rf)
+Sharpe.boot.BND = computeSEconfintSharpe(ret.mat[, "BND", drop=FALSE], risk.free=rf)
+Sharpe.boot.VEA = computeSEconfintSharpe(ret.mat[, "VEA", drop=FALSE], risk.free=rf)
+Sharpe.boot.VWO = computeSEconfintSharpe(ret.mat[, "VWO", drop=FALSE], risk.free=rf)
+Sharpe.boot.VIG = computeSEconfintSharpe(ret.mat[, "VIG", drop=FALSE], risk.free=rf)
+
+Sharpe.mat = rbind(Sharpe.boot.VTI,
+                Sharpe.boot.BND,
+                Sharpe.boot.VEA,
+                Sharpe.boot.VWO,
+                Sharpe.boot.VIG)
+rownames(Sharpe.mat) = colnames(projectReturns)
+Sharpe.mat <- as.data.frame(Sharpe.mat)
+Sharpe.mat <- Sharpe.mat[order(-Sharpe.mat$Sharpe), ]
+kable(Sharpe.mat, caption = "Bootstrap Sharpe Ratios with Standard Errors", digits = 3)
+```
+
+From the Sharpe Ratios table, VTI has the highest estimated Sharpe ratio at 0.206. However, the wide 95% confidence intervals relative to the point estimates indicate considerable uncertainty --- a reminder that Sharpe ratios, like mean returns, are estimated with substantial imprecision over short sample periods.
+
+## Annualized Estimates & Future Values
+
+```{r}
+rf.annual = 12*rf
+muhat.annual = 12*muhat.vals
+sigmahat.annual = sqrt(12)*sigmahat.vals
+sharpe.annual <- (muhat.annual - rf.annual) / sigmahat.annual
+future.val <- (1 + muhat.annual) ^ 5
+
+annual_summary <- data.frame(
+  ETF = names(muhat.vals),
+  Ann_Mean = round(muhat.annual, 4),
+  Ann_SD = round(sigmahat.annual, 4),
+  Ann_Sharpe = round(sharpe.annual, 3),
+  Future_Value_5Y = round(future.val, 3)
+)
+annual_summary <- annual_summary[order(-annual_summary$Ann_Sharpe), ]
+kable(annual_summary, caption = "Annualized Statistics and 5-Year Future Values", row.names = FALSE)
+```
+
+The annualized means line up well with publicly reported historical figures (for example, those shown on Yahoo Finance). Likewise, the ordering of annualized Sharpe ratios matches the ranking we observed at the monthly level (VTI highest, then VIG, VEA, VWO, BND). The future values that measure the estimated return in April 2025 had \$1 been invested on May 2020 are as displayed in the table-- VTI leads with \$2.086 followed by VIG, VEA, VWO, BND.
+
+## Pairwise Scatterplots & Covariance Matrix
+
+```{r, fig.height=6, fig.width=8}
+pairs(coredata(projectReturns), col=colors.pro["VTI"], pch = 16, cex = 0.8)
+kable(round(cov.mat, 6), caption = "Covariance Matrix")
+```
+
+From the pair-wise plot, all equity‐equity bivariate plots display positive linear association (high correlations) among the four equity ETFs and bonds (BND) exhibit weak or slightly negative co‐movement with each equity ETF.
+
+From the covariance matrix, we can see positive covariances between equities ETFs, whereas the covariances between BND and the rest are only slightly positive, implying that bonds did not consistently provide a cushion when equities fell, which is a trend that was observed in the movements of bond and equity markets prior to mid 2022.
+
+## Corrplot
+
+```{r, fig.height=5, fig.width=6}
+corrplot.mixed(cor.mat, upper="ellipse", 
+               lower.col = "black", number.cex = 0.9,
+               tl.col = "black", tl.cex = 0.9)
+```
+
+From the corrplot, the strongest pairwise correlation is between VTI and VIG (0.94) while at the other extreme, the lowest correlation is between VWO and VIG (0.54). And because no assets are perfectly correlated (rho = 1), diversification should reduce risks for individual assets.
+
+## Value-at-Risk Calculations
+
+We use three helper functions --- `Value.at.Risk()` for normal and empirical VaR estimates, `ValueAtRisk.boot()` as a bootstrap statistic, and `computeSEconfintVaR()` which wraps the bootstrap to return point estimate, standard error, and 95% confidence interval. Definitions live in `R/risk_metrics.R`.
+
+## Bootstrap VaR Analysis
+
+```{r}
+# 1% bootstrap VaR
+set.seed(123)
+bVaR.VTI01 = computeSEconfintVaR(ret.mat[, "VTI", drop=FALSE], p=0.01)
+bVaR.VIG01 = computeSEconfintVaR(ret.mat[, "VIG", drop=FALSE], p=0.01)
+bVaR.VEA01 = computeSEconfintVaR(ret.mat[, "VEA", drop=FALSE], p=0.01)
+bVaR.VWO01 = computeSEconfintVaR(ret.mat[, "VWO", drop=FALSE], p=0.01)
+bVaR.BND01 = computeSEconfintVaR(ret.mat[, "BND", drop=FALSE], p=0.01)
+
+# Combined, taking absolute value for magnitude, and setting column names
+VaR01_mat <- abs(rbind(VTI = bVaR.VTI01, BND = bVaR.BND01, VEA = bVaR.VEA01, VWO = bVaR.VWO01, VIG = bVaR.VIG01))
+
+kable(VaR01_mat, 
+      caption = "1% Bootstrap VaR ($100,000 investment)", 
+      digits = 0,
+      col.names = c("VaR 1%", "SE", "Lower CI (95%)", "Upper CI (95%)"))
+```
+
+```{r}
+# 5% bootstrap VaR
+set.seed(123)
+bVaR.VTI.05 = computeSEconfintVaR(ret.mat[, "VTI", drop=FALSE])
+bVaR.VIG.05 = computeSEconfintVaR(ret.mat[, "VIG", drop=FALSE])
+bVaR.VEA.05 = computeSEconfintVaR(ret.mat[, "VEA", drop=FALSE])
+bVaR.VWO.05 = computeSEconfintVaR(ret.mat[, "VWO", drop=FALSE])
+bVaR.BND.05 = computeSEconfintVaR(ret.mat[, "BND", drop=FALSE])
+
+# Combined, taking absolute value for magnitude, and setting column names
+VaR05_mat <- abs(rbind(VTI = bVaR.VTI.05, BND = bVaR.BND.05, VEA = bVaR.VEA.05, VWO = bVaR.VWO.05, VIG = bVaR.VIG.05))
+
+kable(VaR05_mat, 
+      caption = "5% Bootstrap VaR ($100,000 investment)", 
+      digits = 0,
+      col.names = c("VaR 5%", "SE", "Lower CI (95%)", "Upper CI (95%)"))
+```
+
+## Normal Var vs. Empirical VaR
+
+```{r}
+# 1% and 5% normal VaR
+norm_VaR_1 <- Value.at.Risk(ret.mat, p=0.01, w=100000, method="normal", return.type="simple")
+norm_VaR_5<- Value.at.Risk(ret.mat, p=0.05, w=100000, method="normal", return.type="simple")
+
+# 1% and 5% Empirical VaR
+VaR.empirical.01 = Value.at.Risk(ret.mat, p=0.01, 
+                                 method="empirical",
+                                 return.type="simple")
+VaR.empirical.05 = Value.at.Risk(ret.mat, p=0.05, 
+                                 method="empirical",
+                                 return.type="simple")
+VaR_table <- data.frame(
+  ETF = names(norm_VaR_1),
+  # Added abs() to all values below to convert to magnitude
+  Normal_VaR_01 = round(abs(norm_VaR_1), 2),
+  Empirical_VaR_01 = round(abs(VaR.empirical.01), 2),
+  Normal_VaR_05 = round(abs(norm_VaR_5), 2),
+  Empirical_VaR_05 = round(abs(VaR.empirical.05), 2)
+)
+kable(VaR_table, 
+      caption = "Normal vs Empirical VaR Comparison", 
+      row.names = FALSE,
+      col.names = c("ETF", "Normal VaR 1%", "Empirical VaR 1%", "Normal VaR 5%", "Empirical VaR 5%"))
+```
+
+From the table, VEA consistently exhibits the largest (worst) Value-at-Risk across both confidence levels, while BND produces the smallest (best). In all cases, the normal VaR is slightly larger in magnitude (worse) than the empirical VaR. The bootstrapped standard errors and confidence intervals indicate that none of the VaR estimates are particularly precise.
+
+# Rolling Sample Statistics
+
+## Rolling Statistics for VTI
+
+```{r, fig.height=5, fig.width=10}
+roll.muhat.VTI <- rollapply(projectReturns[, "VTI"], width = 24, by = 1, FUN = mean, align = "right")
+roll.sigmahat.VTI <- rollapply(projectReturns[, "VTI"], width = 24, by = 1, FUN = sd, align = "right")
+
+combined.VTI <- merge(projectReturns[, "VTI"], roll.muhat.VTI, roll.sigmahat.VTI)
+colnames(combined.VTI) <- c("Returns", "Rolling Mean", "Rolling Volatility")
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot.zoo(na.omit(combined.VTI), plot.type = "single", lwd = c(1.5, 2.5, 2.5),
+         # Added unname() wrapper here
+         col = unname(c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"])),
+         ylab = "Returns, Mean, and Volatility", xlab = "Date",
+         main = "24-months Rolling Statistics: VTI")
+
+legend("topright", legend = c("Returns", "Rolling Mean", "Rolling Volatility"),
+       col = c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"]), 
+       lty = 1, lwd = c(1.5, 2.5, 2.5), bty = "n")
+abline(h = 0, lty = 2, col = "gray50")
+```
+
+## Rolling Statistics for BND
+
+```{r, fig.height=5, fig.width=10}
+roll.muhat.BND <- rollapply(projectReturns[, "BND"], width = 24, by = 1, FUN = mean, align = "right")
+roll.sigmahat.BND <- rollapply(projectReturns[, "BND"], width = 24, by = 1, FUN = sd, align = "right")
+
+combined.BND <- merge(projectReturns[, "BND"], roll.muhat.BND, roll.sigmahat.BND)
+colnames(combined.BND) <- c("Returns", "Rolling Mean", "Rolling Volatility")
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot.zoo(na.omit(combined.BND), plot.type = "single", lwd = c(1.5, 2.5, 2.5),
+         # Added unname() wrapper here
+         col = unname(c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"])),
+         ylab = "Returns, Mean, and Volatility", xlab = "Date",
+         main = "24-months Rolling Statistics: BND")
+
+legend("topright", legend = c("Returns", "Rolling Mean", "Rolling Volatility"),
+       col = c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"]), 
+       lty = 1, lwd = c(1.5, 2.5, 2.5), bty = "n")
+abline(h = 0, lty = 2, col = "gray50")
+```
+
+## Rolling Statistics for VEA
+
+```{r, fig.height=5, fig.width=10}
+roll.muhat.VEA <- rollapply(projectReturns[, "VEA"], width = 24, by = 1, FUN = mean, align = "right")
+roll.sigmahat.VEA <- rollapply(projectReturns[, "VEA"], width = 24, by = 1, FUN = sd, align = "right")
+
+combined.VEA <- merge(projectReturns[, "VEA"], roll.muhat.VEA, roll.sigmahat.VEA)
+colnames(combined.VEA) <- c("Returns", "Rolling Mean", "Rolling Volatility")
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot.zoo(na.omit(combined.VEA), plot.type = "single", lwd = c(1.5, 2.5, 2.5),
+         # Add unname() here so plot.zoo assigns colors by order, not by name
+         col = unname(c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"])),
+         ylab = "Returns, Mean, and Volatility", xlab = "Date",
+         main = "24-months Rolling Statistics: VEA")
+
+legend("topright", legend = c("Returns", "Rolling Mean", "Rolling Volatility"),
+       col = c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"]), 
+       lty = 1, lwd = c(1.5, 2.5, 2.5), bty = "n")
+abline(h = 0, lty = 2, col = "gray50")
+```
+
+## Rolling Statistics for VWO
+
+```{r, fig.height=5, fig.width=10}
+roll.muhat.VWO <- rollapply(projectReturns[, "VWO"], width = 24, by = 1, FUN = mean, align = "right")
+roll.sigmahat.VWO <- rollapply(projectReturns[, "VWO"], width = 24, by = 1, FUN = sd, align = "right")
+
+combined.VWO <- merge(projectReturns[, "VWO"], roll.muhat.VWO, roll.sigmahat.VWO)
+colnames(combined.VWO) <- c("Returns", "Rolling Mean", "Rolling Volatility")
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot.zoo(na.omit(combined.VWO), plot.type = "single", lwd = c(1.5, 2.5, 2.5),
+         # Added unname() wrapper here
+         col = unname(c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"])),
+         ylab = "Returns, Mean, and Volatility", xlab = "Date",
+         main = "24-months Rolling Statistics: VWO")
+
+legend("topright", legend = c("Returns", "Rolling Mean", "Rolling Volatility"),
+       col = c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"]), 
+       lty = 1, lwd = c(1.5, 2.5, 2.5), bty = "n")
+abline(h = 0, lty = 2, col = "gray50")
+```
+
+## Rolling Statistics for VIG
+
+```{r, fig.height=5, fig.width=10}
+roll.muhat.VIG <- rollapply(projectReturns[, "VIG"], width = 24, by = 1, FUN = mean, align = "right")
+roll.sigmahat.VIG <- rollapply(projectReturns[, "VIG"], width = 24, by = 1, FUN = sd, align = "right")
+
+combined.VIG <- merge(projectReturns[, "VIG"], roll.muhat.VIG, roll.sigmahat.VIG)
+colnames(combined.VIG) <- c("Returns", "Rolling Mean", "Rolling Volatility")
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot.zoo(na.omit(combined.VIG), plot.type = "single", lwd = c(1.5, 2.5, 2.5),
+         # Added unname() wrapper here
+         col = unname(c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"])),
+         ylab = "Returns, Mean, and Volatility", xlab = "Date",
+         main = "24-months Rolling Statistics: VIG")
+
+legend("topright", legend = c("Returns", "Rolling Mean", "Rolling Volatility"),
+       col = c(colors.pro["VEA"], colors.pro["VTI"], colors.pro["BND"]), 
+       lty = 1, lwd = c(1.5, 2.5, 2.5), bty = "n")
+abline(h = 0, lty = 2, col = "gray50")
+```
+
+From the rolling statistics, VTI and VIG demonstrate largely identical patterns across the 24-month period, differing only in scale of fluctuations---reflecting the substantial overlap in equities included in both ETFs. VWO and VEA also exhibit similar rolling means and volatilities, though VWO's returns display greater fluctuations. BND is distinct, with a rolling mean beginning in negative territory before gradually turning positive, while its rolling volatility remained the smallest and most stable among the five ETFs.
+
+While financial time series are rarely strictly stationary, the rolling statistics do not exhibit permanent structural breaks or abrupt level change over this specific post-2020 sample period. Therefore, covariance stationarity serves as a reasonable working assumption for the mean-variance optimization framework used in this analysis.
+
+## 24-month rolling estimates of the correlation between US stocks (VTI) and US bonds (BND)
+
+```{r, fig.height=5, fig.width=10}
+ret.VB <- projectReturns[, c("VTI", "BND")]
+
+roll.rhohat.VB <- rollapply(ret.VB, width = 24, FUN = function(x) cor(x[,1], x[,2]),
+                            by = 1, by.column = FALSE, align = "right")
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot(na.omit(roll.rhohat.VB),
+     main = "24-Month Rolling Correlation: VTI vs BND",
+     ylab = "Correlation", col = colors.pro["VTI"], lwd = 2.5, ylim = c(0, 1))
+abline(h = mean(na.omit(roll.rhohat.VB)), lty = 2, col = colors.pro["BND"], lwd = 2)
+grid(col = "gray90", lty = 1)
+```
+
+The 24-month rolling correlation between VTI and BND remained relatively stable between 0.5 and 0.8 throughout the observed period, indicating a persistently strong positive relationship. This challenges the traditional assumption that bonds serve as a reliable hedge against equity downturns as the data reflects the abnormal market dynamics in recent years, where stocks and bonds have tended to move together, thereby reducing the diversification benefits typically offered by bonds during equity market downturns.
+
+# Portfolio Theory: 5 ETF
+
+This section applies mean-variance optimization to all five ETFs, including BND. As the analysis reveals, BND's negative mean return during this period creates a pathological case where the global minimum variance portfolio underperforms the risk-free rate, making a tangency portfolio mathematically undefined.
+
+## Equally weighted Portfolio
+
+```{r}
+ew <- rep(1, 5) / 5
+ew.port <- getPortfolio(muhat.vals, cov.mat, weights = ew)
+Sharpe.ewp <- (ew.port$er*12 - rf.annual) / (ew.port$sd*sqrt(12))
+
+ewp_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(ew.port$er * 100, 3), "%"),
+            paste0(round(ew.port$sd * 100, 3), "%"),
+            round(Sharpe.ewp, 3))
+)
+kable(ewp_summary, caption = "Equally Weighted Portfolio (5 ETF)", col.names = c("Metric", "Value"))
+
+ewp_weights <- data.frame(ETF = names(ew.port$weights), Weight = ew.port$weights)
+kable(ewp_weights, caption = "EWP Weights", digits = 3, row.names = FALSE)
+```
+
+The equally weighted portfolio allocates 20% to each ETF, serving as a naive diversification benchmark. It has an monthly expected return of 0.827%, a monthly standard deviation of 3.575%, and an annual sharpe ratio of 0.479. In comparison to individual assets, the annual sharpe ratio placed in the middle of VTI (0.713) and BND (-0.712), reflecting the benefits of diversification while still maintaining solid risk-adjusted returns.
+
+## Global Minimum Variance Portfolio (Short sell allowed)
+
+```{r}
+gmin.port <- globalMin.portfolio(muhat.vals, cov.mat, shorts = TRUE)
+Sharpe.gmin <- (gmin.port$er*12 - rf.annual) / (gmin.port$sd*sqrt(12))
+
+gmvp_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Risk-Free Rate (Monthly)", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(gmin.port$er * 100, 4), "%"),
+            paste0(round(gmin.port$sd * 100, 3), "%"),
+            paste0(round(rf * 100, 3), "%"),
+            round(Sharpe.gmin, 3))
+)
+kable(gmvp_summary, caption = "GMVP (5 ETF, Shorts Allowed)", col.names = c("Metric", "Value"))
+
+gmvp_weights <- data.frame(ETF = names(gmin.port$weights), Weight = round(gmin.port$weights, 4))
+kable(gmvp_weights, caption = "GMVP Weights (Shorts Allowed)", row.names = FALSE)
+```
+
+The GMVP assigns negative weights to VTI (-0.200) and VEA (-0.383), meaning that these two assets are sold short, while concentrating heavily in BND (111.1%). In addition, the portfolio's expected return (-0.1745%) falls below the risk-free rate (0.333%), resulting in a negative Sharpe ratio of (-1.109).
+
+This confirms the impracticality of GMVP as investors would be accepting additional volatility while earning less than a risk-free investment, not to mention that short selling involves additional costs, margin requirements, and risks which may not be feasible for retail investors.
+
+## Global Minimum Variance Portfolio (Short sell not allowed)
+
+```{r}
+gmin.port.ns <- globalMin.portfolio(muhat.vals, cov.mat, shorts = FALSE)
+Sharpe.gmin.ns <- (gmin.port.ns$er*12 - rf.annual) / (gmin.port.ns$sd*sqrt(12))
+
+gmvp_ns_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(gmin.port.ns$er * 100, 4), "%"),
+            paste0(round(gmin.port.ns$sd * 100, 3), "%"),
+            round(Sharpe.gmin.ns, 3))
+)
+kable(gmvp_ns_summary, caption = "GMVP (5 ETF, No Short Sales)", col.names = c("Metric", "Value"))
+
+gmvp_ns_weights <- data.frame(ETF = names(gmin.port.ns$weights), Weight = round(gmin.port.ns$weights, 4))
+kable(gmvp_ns_weights, caption = "GMVP Weights (No Short Sales)", row.names = FALSE)
+```
+
+Without short sales, the GMVP allocates all weights to BND as it is the least volatile asset in the universe. However, its monthly expected return (-0.047%) still falls below the risk‐free rate (0.333%), yielding a negative Sharpe ratio of -0.712, meaning that investors would be taking on roughly 1.8 % volatility to earn a negative excess return. While this constrained portfolio slightly outperforms its short-sell allowed counterpart in terms of expected return, it carries more risk without delivering a meaningful premium over the risk‐free rate, making neither of them a reasonable option for investors.
+
+## Tangency Portfolio
+
+Because both GMVPs have expected returns below the risk-free rate, a tangency portfolio is mathematically undefined. The Capital Allocation Line would have a negative slope, in other words, investors are better off holding 100% risk-free assets than any combination involving the 5-ETF efficient frontier's minimum-variance region.
+
+## Efficient Frontier
+
+```{r, fig.height=6, fig.width=10}
+e.front <- efficient.frontier(muhat.vals, cov.mat, alpha.min = -1, alpha.max = 1, nport = 40)
+e.front.ns <- efficient.frontier(muhat.vals, cov.mat, shorts = FALSE,
+                                  alpha.min = 0, alpha.max = 1, nport = 40)
+
+# Portfolio marker colors
+col.ewp <- "#FF6B35"
+col.gmvp <- "#1C1C1C"
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot(e.front$sd, e.front$er, pch = 16, cex = 0.8, col = colors.pro["VTI"], 
+     xlab = "Standard Deviation", ylab = "Expected Return", 
+     xlim=c(0,0.06), ylim=c(-0.02,0.02),
+     main = "Efficient Frontier: 5 ETF Universe",
+     panel.first = grid(col = "gray90", lty = 1))
+
+# No-shorts frontier
+lines(e.front.ns$sd, e.front.ns$er, lwd = 3, col = colors.pro["BND"], lty = 2)
+
+# Individual assets
+points(sigmahat.vals, muhat.vals, pch = 19, cex = 2, col = colors.pro)
+text(sigmahat.vals, muhat.vals, labels = colnames(projectReturns), pos = 4, font = 2)
+
+# Risk-free rate
+points(0, rf, pch = 15, cex = 1.5, col = "darkgreen")
+text(0, rf, labels = "RF", pos = 4, font = 2)
+
+# Equally weighted portfolio
+points(ew.port$sd, ew.port$er, pch = 18, cex = 2.5, col = col.ewp)
+text(ew.port$sd, ew.port$er, labels = "EWP", pos = 3, font = 2)
+
+# Global minimum variance portfolio (shorts)
+points(gmin.port$sd, gmin.port$er, pch = 17, cex = 2, col = col.gmvp)
+text(gmin.port$sd, gmin.port$er, labels = "GMVP", pos = 2, font = 2)
+
+# Global minimum variance portfolio (no shorts)
+points(gmin.port.ns$sd, gmin.port.ns$er, pch = 17, cex = 2, col = col.gmvp)
+text(gmin.port.ns$sd, gmin.port.ns$er, labels = "GMVP (NS)", pos = 4, font = 2)
+
+abline(h = 0, lty = 2, col = "gray50")
+
+legend("topleft", legend = c("Frontier (Shorts)", "Frontier (No Shorts)"),
+       col = c(colors.pro["VTI"], colors.pro["BND"]), lwd = c(NA, 3), pch = c(16, NA), lty = c(NA, 2), bty = "n")
+```
+
+## Portfolio Comparison
+
+```{r}
+comparison_5etf <- data.frame(
+  Portfolio = c("Equal Weight", "GMVP (Shorts)", "GMVP (No Shorts)", "Risk-Free Asset"),
+  Monthly_Return = c(ew.port$er, gmin.port$er, gmin.port.ns$er, rf),
+  Monthly_SD = c(ew.port$sd, gmin.port$sd, gmin.port.ns$sd, 0),
+  Annual_Sharpe = c(Sharpe.ewp, Sharpe.gmin, Sharpe.gmin.ns, NA)
+)
+comparison_5etf$Monthly_Return <- paste0(round(comparison_5etf$Monthly_Return * 100, 3), "%")
+comparison_5etf$Monthly_SD <- paste0(round(comparison_5etf$Monthly_SD * 100, 3), "%")
+comparison_5etf$Annual_Sharpe <- round(comparison_5etf$Annual_Sharpe, 3)
+
+kable(comparison_5etf, 
+      caption = "5-ETF Portfolio Comparison",
+      col.names = c("Portfolio", "E[R] Monthly", "SD Monthly", "Sharpe (Ann.)"))
+```
+
+The comparison reveals a fundamental problem with including BND in this sample period:
+
+\begin{itemize}
+  \item \textbf{GMVPs underperform risk-free asset}: Both minimum-variance portfolios have expected returns below the risk-free rate, offering negative excess returns for bearing volatility risk.
+  
+  \item \textbf{No tangency portfolio exists}: Because the GMVP return falls below the risk-free rate, mean-variance optimization cannot identify an optimal risky portfolio.
+  
+  \item \textbf{Equal weight is suboptimal but viable}: The EWP achieves a positive expected return (0.827\%) but its Sharpe ratio (0.479) is lower than what can be achieved by excluding BND entirely.
+\end{itemize}
+
+These results motivate the subsequent 4-ETF analysis, which excludes BND and produces well-defined optimal portfolios with positive excess returns.
+
+# Portfolio Theory: 4 ETF (Equity ETFs)
+
+This section excludes BND and focuses exclusively on the four equity ETFs to construct portfolios with positive expected excess returns.
+
+```{r}
+mu_stock = colMeans(projectReturns[,-2])
+sd_stock = apply(projectReturns[,-2], 2, sd)
+cov_stock = var(projectReturns[,-2])
+stock_ETFs <- c("VTI", "VEA", "VWO", "VIG")
+```
+
+## Portfolios with Short Sales Allowed
+
+### Equally weighted Portfolio
+
+```{r}
+ew.stock <- rep(1, 4) / 4
+ew.port.stock <- getPortfolio(mu_stock, cov_stock, weights = ew.stock)
+Sharpe.ewp.stock <- (ew.port.stock$er*12 - rf.annual) / (ew.port.stock$sd*sqrt(12))
+
+ewp_stock_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(ew.port.stock$er * 100, 3), "%"),
+            paste0(round(ew.port.stock$sd * 100, 3), "%"),
+            round(Sharpe.ewp.stock, 3))
+)
+kable(ewp_stock_summary, caption = "Equally Weighted Portfolio (4 Stock ETFs)", col.names = c("Metric", "Value"))
+
+ewp_stock_weights <- data.frame(ETF = stock_ETFs, Weight = ew.stock)
+kable(ewp_stock_weights, caption = "EWP Weights (Stock ETFs)", digits = 3, row.names = FALSE)
+```
+
+### Global Minimum Variance Portfolio (Short sell allowed)
+
+```{r}
+gmin.port.stock <- globalMin.portfolio(mu_stock, cov_stock, shorts = TRUE)
+Sharpe.gmin.stock <- (gmin.port.stock$er*12 - rf.annual) / (gmin.port.stock$sd*sqrt(12))
+
+gmvp_stock_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Risk-Free Rate (Monthly)", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(gmin.port.stock$er * 100, 3), "%"),
+            paste0(round(gmin.port.stock$sd * 100, 3), "%"),
+            paste0(round(rf * 100, 3), "%"),
+            round(Sharpe.gmin.stock, 3))
+)
+kable(gmvp_stock_summary, caption = "GMVP (4 Stock ETFs, Shorts Allowed)", col.names = c("Metric", "Value"))
+
+gmvp_stock_weights <- data.frame(ETF = stock_ETFs, Weight = round(gmin.port.stock$weights, 4))
+kable(gmvp_stock_weights, caption = "GMVP Weights (Shorts Allowed)", row.names = FALSE)
+```
+
+The GMVP assigns negative weights to VTI (-0.622) and VEA (-0.705). The portfolio offers a monthly expected return of 0.861%, exceeding the risk-free rate (0.333%), and an annualized Sharpe ratio of 0.549 --- only slightly higher than that of VWO's 0.319 but at evidently lower risk.
+
+However, because short selling involves additional margin requirements and risks, this may not be a practical portfolio for many investors.
+
+### Tangency Portfolio
+
+```{r}
+tan.port.stock <- tangency.portfolio(mu_stock, cov_stock, rf, shorts = TRUE)
+Sharpe.tan <- (tan.port.stock$er * 12 - rf.annual) / (tan.port.stock$sd*sqrt(12))
+
+tan_stock_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(tan.port.stock$er * 100, 3), "%"),
+            paste0(round(tan.port.stock$sd * 100, 3), "%"),
+            round(Sharpe.tan, 3))
+)
+kable(tan_stock_summary, caption = "Tangency Portfolio (4 Stock ETFs, Shorts Allowed)", col.names = c("Metric", "Value"))
+
+tan_stock_weights <- data.frame(ETF = stock_ETFs, Weight = round(tan.port.stock$weights, 4))
+kable(tan_stock_weights, caption = "Tangency Portfolio Weights (Shorts Allowed)", row.names = FALSE)
+```
+
+The unconstrained tangency portfolio assigns a negative weight to VEA (-1.111) while holding VTI (1.029), VWO (0.249), and VIG (0.833) long. The portfolio achieves the highest Sharpe Ratio (0.791) among all portfolios, reflecting its objective of maximizing return per unit of risk. However, the mandatory short position limits its practicality for retail investors and institutional asset managers overseeing retirement accounts.
+
+### Efficient Frontier
+
+```{r, fig.height=6, fig.width=10}
+e.front.stock <- efficient.frontier(mu_stock, cov_stock, alpha.min = -1, alpha.max = 1, nport = 40)
+
+# Portfolio marker colors
+col.ewp <- "#FF6B35"
+col.gmvp <- "#1C1C1C"
+col.tangency <- "#D7263D"
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot(e.front.stock$sd, e.front.stock$er, pch = 16, cex = 0.8, col = colors.pro["VTI"], 
+     xlab = "Standard Deviation", ylab = "Expected Return", 
+     xlim=c(0,0.06), ylim=c(0,0.016),
+     main = "Efficient Frontier: 4 Stock ETF Universe (Shorts Allowed)",
+     panel.first = grid(col = "gray90", lty = 1))
+
+# Individual assets
+points(sd_stock, mu_stock, pch = 19, cex = 2, col = colors.pro[stock_ETFs])
+text(sd_stock, mu_stock, labels = stock_ETFs, pos = 4, font = 2)
+
+# Risk-free rate
+points(0, rf, pch = 15, cex = 1.5, col = "darkgreen")
+text(0, rf, labels = "RF", pos = 4, font = 2)
+
+# Equally weighted portfolio
+points(ew.port.stock$sd, ew.port.stock$er, pch = 18, cex = 2.5, col = col.ewp)
+text(ew.port.stock$sd, ew.port.stock$er, labels = "EWP", pos = 1, font = 2)
+
+# Global minimum variance portfolio
+points(gmin.port.stock$sd, gmin.port.stock$er, pch = 17, cex = 2, col = col.gmvp)
+text(gmin.port.stock$sd, gmin.port.stock$er, labels = "GMVP", pos = 2, font = 2)
+
+# Tangency portfolio
+points(tan.port.stock$sd, tan.port.stock$er, pch = 19, cex = 2, col = col.tangency)
+text(tan.port.stock$sd, tan.port.stock$er, labels = "Tangency", pos = 4, font = 2)
+
+# Capital Allocation Line
+abline(a = rf, b = (tan.port.stock$er - rf) / tan.port.stock$sd, 
+       col = colors.pro["VIG"], lwd = 2, lty = 2)
+```
+
+The efficient frontier displays all key portfolios: EWP provides a diversification baseline, GMVP minimizes risk, and the tangency portfolio maximizes risk-adjusted return. The Capital Allocation Line (dashed) represents combinations of the tangency portfolio and the risk-free asset.
+
+## Portfolios without Short Sales
+
+For most individual investors---particularly those with retirement accounts---short selling is either prohibited or impractical. This section examines portfolios under a long-only constraint.
+
+### Global Minimum Variance Portfolio
+
+```{r}
+gmin.port.stock.ns <- globalMin.portfolio(mu_stock, cov_stock, shorts = FALSE)
+Sharpe.gmin.stock.ns <- (gmin.port.stock.ns$er*12 - rf.annual) / (gmin.port.stock.ns$sd*sqrt(12))
+
+gmvp_stock_ns_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(gmin.port.stock.ns$er * 100, 3), "%"),
+            paste0(round(gmin.port.stock.ns$sd * 100, 3), "%"),
+            round(Sharpe.gmin.stock.ns, 3))
+)
+kable(gmvp_stock_ns_summary, caption = "GMVP (4 Stock ETFs, No Short Sales)", col.names = c("Metric", "Value"))
+
+gmvp_stock_ns_weights <- data.frame(ETF = stock_ETFs, Weight = round(gmin.port.stock.ns$weights, 4))
+kable(gmvp_stock_ns_weights, caption = "GMVP Weights (No Short Sales)", row.names = FALSE)
+```
+
+The no-short-sale GMVP has a monthly mean return of 0.962%, which is greater than the risk-free rate (0.333%). Compared to its unconstrained counterpart, it achieves a higher monthly expected return with only slightly higher risk. The portfolio's annualized Sharpe ratio (0.579) also exceeds that of VEA and VWO.
+
+### Tangency Portfolio
+
+```{r}
+tan.port.stock.ns <- tangency.portfolio(mu_stock, cov_stock, risk.free = rf, shorts = FALSE)
+Sharpe.tan.ns <- (tan.port.stock.ns$er*12 - rf.annual) / (tan.port.stock.ns$sd*sqrt(12))
+
+tan_stock_ns_summary <- data.frame(
+  Metric = c("Monthly Expected Return", "Monthly Std Dev", "Annual Sharpe Ratio"),
+  Value = c(paste0(round(tan.port.stock.ns$er * 100, 3), "%"),
+            paste0(round(tan.port.stock.ns$sd * 100, 3), "%"),
+            round(Sharpe.tan.ns, 3))
+)
+kable(tan_stock_ns_summary, caption = "Tangency Portfolio (4 Stock ETFs, No Short Sales)", col.names = c("Metric", "Value"))
+
+tan_stock_ns_weights <- data.frame(ETF = stock_ETFs, Weight = round(tan.port.stock.ns$weights, 4))
+kable(tan_stock_ns_weights, caption = "Tangency Portfolio Weights (No Short Sales)", row.names = FALSE)
+```
+
+The tangency portfolio that does not allow short sale allocates 88.8% of capital to VTI and 11.2% to VIG, entirely excluding VEA and VWO. While its monthly expected return (1.302%), volatility (4.706%), and a risk-adjusted return (Sharpe ratio of 0.713) are all modestly lower than its unconstrained version, it remains higher than all individual assets. Therefore, for most investors, this portfolio represents the most practical option, achieving maximum risk-adjusted return within realistic constraints.
+
+### Efficient Frontier Comparison
+
+```{r, fig.height=6, fig.width=10}
+e.front.stock.ns <- efficient.frontier(mu_stock, cov_stock, shorts = FALSE,
+                                  alpha.min = 0, alpha.max = 1, nport = 40)
+
+# Portfolio marker colors
+col.ewp <- "#FF6B35"
+col.gmvp <- "#1C1C1C"
+col.tangency <- "#D7263D"
+
+par(bg = "white", mar = c(4, 4, 3, 1))
+plot(e.front.stock$sd, e.front.stock$er, pch = 16, cex = 0.8, col = colors.pro["VTI"], 
+     xlab = "Standard Deviation", ylab = "Expected Return", 
+     xlim=c(0,0.06), ylim=c(0,0.016),
+     main = "Efficient Frontier Comparison (4 Stock ETFs)",
+     panel.first = grid(col = "gray90", lty = 1))
+
+# No-shorts frontier
+lines(e.front.stock.ns$sd, e.front.stock.ns$er, lwd = 3, col = colors.pro["BND"], lty = 2)
+
+# Individual assets
+points(sd_stock, mu_stock, pch = 19, cex = 2, col = colors.pro[stock_ETFs])
+text(sd_stock, mu_stock, labels = stock_ETFs, pos = 4, font = 2)
+
+# Risk-free rate
+points(0, rf, pch = 15, cex = 1.5, col = "darkgreen")
+text(0, rf, labels = "RF", pos = 4, font = 2)
+
+# Equally weighted portfolio
+points(ew.port.stock$sd, ew.port.stock$er, pch = 18, cex = 2.5, col = col.ewp)
+text(ew.port.stock$sd, ew.port.stock$er, labels = "EWP", pos = 1, font = 2)
+
+# GMVP (no shorts)
+points(gmin.port.stock.ns$sd, gmin.port.stock.ns$er, pch = 17, cex = 2, col = col.gmvp)
+text(gmin.port.stock.ns$sd, gmin.port.stock.ns$er, labels = "GMVP (NS)", pos = 2, font = 2)
+
+# Tangency (no shorts)
+points(tan.port.stock.ns$sd, tan.port.stock.ns$er, pch = 19, cex = 2, col = col.tangency)
+text(tan.port.stock.ns$sd, tan.port.stock.ns$er, labels = "Tangency (NS)", pos = 2, font = 2)
+
+# Capital Allocation Line (no shorts)
+abline(a = rf, b = (tan.port.stock.ns$er - rf) / tan.port.stock.ns$sd, 
+       col = colors.pro["VIG"], lwd = 2, lty = 1)
+
+legend("topleft", legend = c("Frontier (Shorts)", "Frontier (No Shorts)", "CAL (No Shorts)"),
+       col = c(colors.pro["VTI"], colors.pro["BND"], colors.pro["VIG"]), 
+       lwd = c(NA, 3, 2), pch = c(16, NA, NA), lty = c(NA, 2, 1), bty = "n")
+```
+
+The no-short-sale constraint shifts the efficient frontier inward, reducing the achievable risk-return combinations. However, the constrained tangency portfolio still achieves a competitive Sharpe ratio of 0.713.
+
+## Portfolio Comparison
+
+```{r}
+comparison_4etf <- data.frame(
+  Portfolio = c("Equal Weight", "GMVP (Shorts)", "Tangency (Shorts)", 
+                "GMVP (No Shorts)", "Tangency (No Shorts)"),
+  Monthly_Return = c(ew.port.stock$er, gmin.port.stock$er, tan.port.stock$er,
+                     gmin.port.stock.ns$er, tan.port.stock.ns$er),
+  Monthly_SD = c(ew.port.stock$sd, gmin.port.stock$sd, tan.port.stock$sd,
+                 gmin.port.stock.ns$sd, tan.port.stock.ns$sd),
+  Annual_Sharpe = c(Sharpe.ewp.stock, Sharpe.gmin.stock, Sharpe.tan,
+                    Sharpe.gmin.stock.ns, Sharpe.tan.ns),
+  Short_Sales = c("No", "Yes", "Yes", "No", "No")
+)
+comparison_4etf$Monthly_Return <- paste0(round(comparison_4etf$Monthly_Return * 100, 2), "%")
+comparison_4etf$Monthly_SD <- paste0(round(comparison_4etf$Monthly_SD * 100, 2), "%")
+comparison_4etf$Annual_Sharpe <- round(comparison_4etf$Annual_Sharpe, 3)
+
+kable(comparison_4etf, 
+      caption = "4-ETF Portfolio Comparison",
+      col.names = c("Portfolio", "E[R] Monthly", "SD Monthly", "Sharpe (Ann.)", "Requires Shorts"))
+```
+
+The comparison reveals several key insights:
+
+\begin{itemize}
+  \item \textbf{Short sales offer marginal improvement}: The tangency portfolio with shorts (Sharpe = 0.791) only modestly outperforms the no-shorts version (Sharpe = 0.713), suggesting that the added complexity and costs of short selling may not be worthwhile for most investors.
+  
+  \item \textbf{GMVP trades return for stability}: Both GMVP variants achieve lower volatility than the tangency portfolios but sacrifice expected return. The no-shorts GMVP actually outperforms its shorts-allowed counterpart in both return and Sharpe ratio---an artifact of the specific correlation structure in this sample.
+  
+  \item \textbf{Equal weight underperforms}: Despite its simplicity, the equally weighted portfolio achieves a lower Sharpe ratio (0.598) than both no-shorts optimized portfolios, demonstrating the value of optimization even under realistic constraints.
+\end{itemize}
+
+For most individual investors, the \textbf{no-short-sale tangency portfolio} (88.8% VTI, 11.2% VIG) represents the most practical choice: it achieves the highest risk-adjusted return among implementable strategies and requires no complex trading.
+
+## VaR for No-short Sales Portfolios
+
+```{r}
+ret.mat.stock <- as.matrix(projectReturns[, stock_ETFs])
+ret.ewp.stock <- ret.mat.stock %*% ew.port.stock$weights
+ret.gmin.stock <- ret.mat.stock %*% gmin.port.stock.ns$weights
+ret.tan.stock <- ret.mat.stock %*% tan.port.stock.ns$weights
+
+# Portfolio VaR
+norm.VaR1.ewp <- Value.at.Risk(ret.ewp.stock, p=0.01, w=100000, method="normal", return.type="simple")
+norm.VaR5.ewp <- Value.at.Risk(ret.ewp.stock, p=0.05, w=100000, method="normal", return.type="simple")
+norm.VaR1.gmin <- Value.at.Risk(ret.gmin.stock, p=0.01, w=100000, method="normal", return.type="simple")
+norm.VaR5.gmin <- Value.at.Risk(ret.gmin.stock, p=0.05, w=100000, method="normal", return.type="simple")
+norm.VaR1.tan <- Value.at.Risk(ret.tan.stock, p=0.01, w=100000, method="normal", return.type="simple")
+norm.VaR5.tan <- Value.at.Risk(ret.tan.stock, p=0.05, w=100000, method="normal", return.type="simple")
+
+Port_VaR_table <- data.frame(
+  Portfolio = c("Equal Weight", "GMVP (NS)", "Tangency (NS)"),
+  VaR_1pct = abs(c(norm.VaR1.ewp, norm.VaR1.gmin, norm.VaR1.tan)),
+  VaR_5pct = abs(c(norm.VaR5.ewp, norm.VaR5.gmin, norm.VaR5.tan))
+)
+
+# Use col.names to force specific headers including the % sign
+kable(Port_VaR_table, 
+      caption = "Portfolio VaR ($100,000 Investment)", 
+      digits = 0,
+      col.names = c("Portfolio", "VaR 1%", "VaR 5%"))
+
+# Individual ETF VaR for comparison
+norm_VaR_1 <- Value.at.Risk(ret.mat[, stock_ETFs], p=0.01, w=100000, method="normal", return.type="simple")
+norm_VaR_5 <- Value.at.Risk(ret.mat[, stock_ETFs], p=0.05, w=100000, method="normal", return.type="simple")
+Stock_VaR_table <- data.frame(
+  ETF = stock_ETFs,
+  Normal_VaR_01 = abs(norm_VaR_1),
+  Normal_VaR_05 = abs(norm_VaR_5)
+)
+
+# Fix headers here as well for consistency
+kable(Stock_VaR_table, 
+      caption = "Individual Stock ETF VaR", 
+      digits = 0, 
+      row.names = FALSE,
+      col.names = c("ETF", "VaR 1%", "VaR 5%"))
+```
+
+All three portfolios exhibit lower VaR than most individual ETFs, demonstrating the risk-reduction benefits of diversification. The GMVP achieves the lowest downside risk, while the tangency portfolio's VaR remains comparable to the equal-weight benchmark despite its concentrated allocation to VTI.
+
+Overall, GMV portfolio is best option to minimize loss as well as risk whereas the tangency portfolio offers a decent balance between return and risk.
+
+# Risk Budgeting
+
+```{r}
+riskReport <- function(W0, er, cov.mat, weights) {
+  d <- weights * W0
+  sig.vec  <- sqrt(diag(cov.mat))
+  sig.p    <- as.numeric(sqrt(weights %*% cov.mat %*% weights))
+  MCR.vol  <- (cov.mat %*% weights) / sig.p
+  CR.vol   <- weights * MCR.vol
+  PCR.vol  <- CR.vol / sig.p
+  rho.p    <- MCR.vol / sig.vec
+  beta.p   <- MCR.vol / sig.p
+
+  rpt <- cbind(d, weights, sig.vec, MCR.vol, CR.vol, PCR.vol, rho.p, beta.p)
+  colnames(rpt) <- c("Dollar", "Weight", "Vol", "MCR", "CR", "PCR", "Rho", "Beta")
+  rownames(rpt) <- names(weights)
+  return(rpt)
+}
+```
+
+## Equally Weighted Portfolio
+
+```{r}
+w0 <- 100000
+risk.report.ew <- riskReport(w0, mu_stock, cov_stock, ew.port.stock$weights)
+kable(risk.report.ew, caption = "Risk Attribution - Equally Weighted Stock Portfolio", digits = 4)
+```
+
+The equally weighted portfolio allocates 25% of capital to each stock ETF. However, the risk attribution does not match the asset allocation. Among the four ETFs, VEA contributes the most to portfolio risk with a percent contribution to risk (PCR) of 27.9% and a beta of 1.117. Similarly, VTI has a PCR of about 27.3% and a beta of 1.093, both of which exceed their 25% capital allocation, indicating that these two assets amplify volatility beyond their weight.This confirms that capital allocation is not equivalent to risk allocation, and that a simple 1/N portfolio is effectively a levered bet on the most volatile assets.
+
+In comparison, VIG has a PCR of approximately 23.6% and a beta of 0.945, indicating that its risk contribution is roughly proportional to its capital allocation. VWO has the lowest PCR at approximately 21.1% and a beta of 0.845, making it the smallest contributor to risk in the equally weighted portfolio.
+
+## Global Minimum Variance Portfolio (No Short Sales)
+
+```{r}
+risk.report.gmvp <- riskReport(w0, mu_stock, cov_stock, gmin.port.stock.ns$weights)
+kable(risk.report.gmvp, caption = "Risk Attribution - GMVP (No Short Sales)", digits = 4)
+```
+
+The GMVP without short sales allocates capital to VWO (46.5%) and VIG (53.5%), deliberately excluding the higher-volatility assets VTI and VEA. The risk attribution reveals that both assets contribute to portfolio risk in proportion to their weights---VIG contributes approximately 54% of total risk while VWO contributes approximately 46%. Both assets have betas close to 1.0, indicating that neither asset disproportionately amplifies or dampens portfolio volatility. This balanced risk contribution is precisely what the GMVP optimization achieves: minimizing total variance by selecting assets whose risk contributions align with their capital allocations.
+
+## Tangency Portfolio (No Short Sales)
+
+```{r}
+risk.report.tan <- riskReport(w0, mu_stock, cov_stock, tan.port.stock.ns$weights)
+kable(risk.report.tan, caption = "Risk Attribution - Tangency Portfolio (No Short Sales)", digits = 4)
+```
+
+The tangency portfolio concentrates 88.8% of capital in VTI and 11.2% in VIG. The risk attribution shows that VTI dominates the portfolio's risk profile, contributing approximately 90% of total risk with a beta of 1.014. VIG, despite receiving 11.2% of capital, contributes only about 10% of risk with a beta of 0.923. This concentration is intentional---the tangency portfolio maximizes the Sharpe ratio by allocating heavily to VTI, which offers the highest expected return per unit of risk. Investors selecting this portfolio should understand that they are accepting concentrated exposure to U.S. large-cap equities in exchange for superior risk-adjusted returns.
+
+## Comparison Across Portfolios
+
+```{r}
+# Summary comparison table
+comparison <- data.frame(
+  Portfolio = c("Equal Weight", "GMVP (NS)", "Tangency (NS)"),
+  Monthly_Return = c(paste0(round(ew.port.stock$er * 100, 2), "%"),
+                     paste0(round(gmin.port.stock.ns$er * 100, 2), "%"),
+                     paste0(round(tan.port.stock.ns$er * 100, 2), "%")),
+  Monthly_SD = c(paste0(round(ew.port.stock$sd * 100, 2), "%"),
+                 paste0(round(gmin.port.stock.ns$sd * 100, 2), "%"),
+                 paste0(round(tan.port.stock.ns$sd * 100, 2), "%")),
+  Sharpe_Annual = c(round(Sharpe.ewp.stock, 3),
+                    round(Sharpe.gmin.stock.ns, 3),
+                    round(Sharpe.tan.ns, 3)),
+  Largest_Risk_Contributor = c("VEA (27.9%)", "VIG (~54%)", "VTI (~90%)")
+)
+kable(comparison, caption = "Portfolio Comparison Summary", col.names = c("Portfolio", "E[R] Monthly", "SD Monthly", "Sharpe (Ann.)", "Largest Risk Contributor"))
+```
+
+The comparison across portfolios illustrates the fundamental trade-offs in portfolio construction:
+
+\begin{itemize}
+  \item \textbf{Equal Weight}: Provides diversification across all four ETFs but results in uneven risk contributions. VEA and VTI contribute disproportionately to risk despite equal capital allocation, making this a suboptimal choice for risk-conscious investors.
+  \item \textbf{GMVP}: Achieves the lowest volatility (3.76\%) by concentrating in lower-beta assets (VWO and VIG) and produces balanced risk contributions. However, it sacrifices expected return (0.96\% vs. 1.30\% for tangency).
+  \item \textbf{Tangency}: Maximizes risk-adjusted return (Sharpe ratio of 0.713) but concentrates risk heavily in VTI. Suitable for investors prioritizing return efficiency over diversification.
+\end{itemize}
+
+The choice among these portfolios depends on investor objectives: risk minimization (GMVP), return maximization per unit of risk (Tangency), or simplicity with moderate diversification (Equal Weight).
+
+# Asset Allocation
+
+This section explores how investors with different risk tolerances can construct portfolios that combine the tangency portfolio with a risk-free asset to achieve their target returns.
+
+## Efficient Portfolio (No Risk-Free Asset)
+
+```{r}
+target.er <- 0.01
+e.port.1 <- efficient.portfolio(mu_stock, cov_stock, target.er, shorts = FALSE)
+
+eff_port_summary <- data.frame(
+  Metric = c("Target Monthly Return", "Achieved Monthly Return", "Monthly Std Dev"),
+  Value = c("1.00%", 
+            paste0(round(e.port.1$er * 100, 3), "%"),
+            paste0(round(e.port.1$sd * 100, 2), "%"))
+)
+kable(eff_port_summary, caption = "Efficient Portfolio (1% Target, No Shorts)", col.names = c("Metric", "Value"))
+
+eff_port_weights <- data.frame(ETF = stock_ETFs, Weight = round(e.port.1$weights, 4))
+kable(eff_port_weights, caption = "Efficient Portfolio Weights", row.names = FALSE)
+```
+
+The efficient portfolio that achieves a monthly expected return of 1% without short sales allocates 37.5% of capital to VWO and 62.5% to VIG, with a monthly standard deviation of 3.78%. This portfolio lies on the efficient frontier and represents the minimum-variance approach to achieving the 1% target using only risky assets.
+
+## Combined Portfolio with Risk-Free Asset
+
+```{r}
+e.port <- tangency.portfolio(mu_stock, cov_stock, rf, shorts = FALSE)
+x.tan  <- (target.er - rf) / (e.port$er - rf)
+x.rf <- 1 - x.tan
+x.stock <- x.tan * e.port$weights
+sd_p <- x.tan * e.port$sd
+er_p <- x.tan * e.port$er + x.rf * rf
+
+combined_weights <- data.frame(
+  Asset = c("Risk-Free", stock_ETFs),
+  Weight = round(c(x.rf, x.stock), 3)
+)
+kable(combined_weights, caption = "Combined Portfolio Weights (1% Target with Rf)", row.names = FALSE)
+
+combined_summary <- data.frame(
+  Metric = c("Weight in Tangency", "Weight in Risk-Free", "Portfolio Expected Return", "Portfolio Std Dev"),
+  Value = c(paste0(round(x.tan * 100, 1), "%"),
+            paste0(round(x.rf * 100, 1), "%"),
+            paste0(round(er_p * 100, 2), "%"),
+            paste0(round(sd_p * 100, 2), "%"))
+)
+kable(combined_summary, caption = "Combined Portfolio Summary", col.names = c("Metric", "Value"))
+```
+
+When a risk-free asset with a monthly return of 0.333% is included while maintaining the principle of no short sales of risky assets, the efficient portfolio targeting 1% monthly allocates 68.8% to the tangency portfolio and 31.2% to the risk-free asset---specifically, 61.1% to VTI, 7.7% to VIG, and 31.2% to the risk-free asset. This portfolio achieves the target monthly expected return of 1.00% with a monthly standard deviation of 3.24%, which is \textit{lower} than the 3.78% achieved by the risky-assets-only efficient portfolio. This demonstrates the power of the capital allocation line: by combining the tangency portfolio with the risk-free asset, investors can achieve the same expected return with less risk.
+
+## Asset Allocation Scenarios by Risk Tolerance
+
+```{r}
+# Generate allocation scenarios for different investor profiles
+targets <- c(0.005, 0.007, 0.010, 0.012, 0.013)
+allocation_scenarios <- data.frame()
+
+for (target in targets) {
+  x.tan.temp <- (target - rf) / (e.port$er - rf)
+  x.rf.temp <- 1 - x.tan.temp
+  sd.temp <- x.tan.temp * e.port$sd
+  sharpe.temp <- (target - rf) / sd.temp
+  
+  # Determine if leverage is required
+  leverage_note <- ifelse(x.tan.temp > 1, "Yes", "No")
+  
+  allocation_scenarios <- rbind(allocation_scenarios, data.frame(
+    Target_Return = paste0(round(target * 100, 1), "%"),
+    Weight_Tangency = paste0(round(x.tan.temp * 100, 1), "%"),
+    Weight_RiskFree = paste0(round(x.rf.temp * 100, 1), "%"),
+    Portfolio_SD = paste0(round(sd.temp * 100, 2), "%"),
+    Leverage_Required = leverage_note
+  ))
+}
+
+kable(allocation_scenarios, 
+      caption = "Asset Allocation Scenarios Along the Capital Allocation Line",
+      col.names = c("Target E[R]", "Weight Tangency", "Weight Risk-Free", "Portfolio SD", "Leverage Required"))
+```
+
+```{r, fig.height=6, fig.width=10}
+# Visualize the Capital Allocation Line with investor profiles
+par(bg = "white", mar = c(4, 4, 3, 1))
+
+# Plot efficient frontier (no shorts)
+plot(e.front.stock.ns$sd, e.front.stock.ns$er, type = "l", lwd = 2, col = colors.pro["VTI"], lty = 2,
+     xlab = "Standard Deviation (Monthly)", ylab = "Expected Return (Monthly)",
+     main = "Capital Allocation Line and Investor Profiles",
+     xlim = c(0, 0.06), ylim = c(0, 0.015),
+     panel.first = grid(col = "gray90", lty = 1))
+
+# Capital Allocation Line
+abline(a = rf, b = (e.port$er - rf) / e.port$sd, col = colors.pro["VIG"], lwd = 2.5)
+
+# Risk-free rate
+points(0, rf, pch = 15, cex = 2, col = "darkgreen")
+text(0, rf, labels = "Risk-Free", pos = 4, font = 2)
+
+# Tangency portfolio
+points(e.port$sd, e.port$er, pch = 19, cex = 2, col = colors.pro["VWO"])
+text(e.port$sd, e.port$er, labels = "Tangency", pos = 4, font = 2)
+
+# Plot investor profile points on CAL
+investor_targets <- c(0.005, 0.007, 0.010, 0.012)
+investor_labels <- c("Conservative", "Moderate", "Growth", "Aggressive")
+investor_colors <- c("blue", "purple", "orange", "red")
+
+for (i in 1:length(investor_targets)) {
+  target <- investor_targets[i]
+  x.tan.temp <- (target - rf) / (e.port$er - rf)
+  sd.temp <- x.tan.temp * e.port$sd
+  points(sd.temp, target, pch = 17, cex = 1.8, col = investor_colors[i])
+  text(sd.temp, target, labels = investor_labels[i], pos = 3, font = 2, cex = 0.8)
+}
+
+legend("bottomright", 
+       legend = c("Efficient Frontier (No Shorts)", "Capital Allocation Line", investor_labels),
+       col = c(colors.pro["VTI"], colors.pro["VIG"], investor_colors),
+       lty = c(2, 1, NA, NA, NA, NA), lwd = c(2, 2.5, NA, NA, NA, NA),
+       pch = c(NA, NA, 17, 17, 17, 17), pt.cex = 1.5, bty = "n", cex = 0.8)
+```
+
+The table and figure above illustrate how investors with varying risk tolerances can position themselves along the Capital Allocation Line (CAL):
+
+\begin{itemize}
+  \item \textbf{Conservative (0.5\% monthly target)}: Allocates only 17.3\% to the tangency portfolio and 82.7\% to risk-free assets, resulting in a low monthly standard deviation of approximately 0.81\%. Suitable for investors prioritizing capital preservation.
+  
+  \item \textbf{Moderate (0.7\% monthly target)}: Allocates 38.0\% to the tangency portfolio and 62.0\% to risk-free assets, achieving a monthly standard deviation of approximately 1.79\%. Balances growth potential with downside protection.
+  
+  \item \textbf{Growth (1.0\% monthly target)}: Allocates 68.8\% to the tangency portfolio and 31.2\% to risk-free assets, with a monthly standard deviation of 3.24\%. Appropriate for investors with longer time horizons seeking capital appreciation.
+  
+  \item \textbf{Aggressive (1.2\% monthly target)}: Allocates 89.6\% to the tangency portfolio and only 10.4\% to risk-free assets, resulting in a monthly standard deviation of approximately 4.22\%. Suitable for investors comfortable with higher volatility in pursuit of maximum returns.
+\end{itemize}
+
+Note that targeting returns above the tangency portfolio's expected return (1.30%) would require leverage---borrowing at the risk-free rate to invest more than 100% in the tangency portfolio. While mathematically valid, leveraged positions introduce additional risks including margin calls and amplified losses, making them unsuitable for most individual investors.
+
+## Constraints on Achievable Returns
+
+```{r}
+max_return_no_short <- max(mu_stock)
+max_return_etf <- names(mu_stock)[which.max(mu_stock)]
+
+constraints_table <- data.frame(
+  Constraint = c("Minimum achievable return (100% risk-free)", 
+                 "Tangency portfolio return",
+                 "Maximum achievable return (no leverage, no shorts)"),
+  Return = c(paste0(round(rf * 100, 3), "%"),
+             paste0(round(e.port$er * 100, 2), "%"),
+             paste0(round(max_return_no_short * 100, 2), "%")),
+  Portfolio = c("100% T-Bills", 
+                "88.8% VTI, 11.2% VIG",
+                paste0("100% ", max_return_etf))
+)
+kable(constraints_table, caption = "Return Constraints for Long-Only Portfolios")
+```
+
+It is impossible to construct a long-only portfolio (no short sales, no leverage) that achieves a target monthly expected return exceeding 1.32%---the mean return of VTI, which is the highest-returning asset in the universe. Investors seeking returns beyond this threshold would need to either (1) employ leverage, (2) allow short selling, or (3) expand the investment universe to include higher-returning (and likely higher-risk) assets.
+
+# Conclusion
+
+## Analytical Insights
+
+This project applied mean-variance portfolio theory to a universe of five Vanguard ETFs over a five-year period characterized by extraordinary market conditions. Beyond the specific numerical results, several broader insights emerge from the analysis.
+
+### The Limits of Diversification
+
+Traditional portfolio theory emphasizes diversification as a "free lunch"---reducing risk without sacrificing return. However, this analysis reveals important caveats:
+
+\begin{itemize}
+  \item \textbf{Correlation structure matters}: With equity-equity correlations ranging from 0.54 to 0.94, diversification benefits within the stock allocation were limited. Adding more equity ETFs does not guarantee meaningful risk reduction if those assets move together.
+  
+  \item \textbf{Regime dependence}: The persistently positive stock-bond correlation (0.5--0.8) during this period contradicts the historical norm of negative correlation. Diversification strategies that assume stable correlation structures may fail precisely when they are needed most---during market stress.
+  
+  \item \textbf{Optimization vs. Naive Diversification}: The analysis provides a quantitative rebuttal to "naive diversification" for this specific market regime. While a simple Equal-Weight strategy provides broad exposure, the mean-variance optimization identified that adding International (VEA) and Emerging Market (VWO) exposures actively detracted from risk-adjusted returns, and that targeted concentration in U.S. equities was statistically superior to a broad global allocation during the sample period.
+\end{itemize}
+
+### Risk Budgeting as a Diagnostic Tool
+
+The risk budgeting analysis demonstrated that capital allocation and risk allocation are not equivalent. In the equally-weighted portfolio, VEA and VTI contributed disproportionately to risk despite receiving equal capital. This insight has practical implications:
+
+\begin{itemize}
+  \item Investors who allocate capital equally across assets may unknowingly concentrate risk in higher-volatility or higher-correlation assets.
+  
+  \item The GMVP's balanced risk contributions come at the cost of excluding higher-returning assets, illustrating the inherent tension between risk minimization and return maximization.
+  
+  \item The tangency portfolio's concentrated risk profile (approximately 90\% from VTI) is a feature, not a bug---it reflects the optimization's objective of maximizing return per unit of risk.
+\end{itemize}
+
+### The Role of the Risk-Free Asset
+
+The Asset Allocation section illustrated how combining the tangency portfolio with a risk-free asset allows investors to achieve target returns with lower volatility than risky-asset-only portfolios. This finding reinforces a core principle of portfolio theory: the capital allocation line dominates the efficient frontier for investors who can access risk-free lending.
+
+However, the assumed 4% annual risk-free rate is a simplification. During the actual sample period, short-term rates varied from near-zero to over 5%, which would significantly affect optimal allocations in practice.
+
+## Methodological Considerations
+
+Several methodological choices influenced the results and warrant acknowledgment:
+
+\begin{enumerate}
+  \item \textbf{Estimation uncertainty}: The wide confidence intervals around mean return estimates (shown in Table 3) suggest that the "optimal" portfolios are estimated with considerable uncertainty. Small changes in expected returns can produce large changes in optimal weights---a well-known limitation of mean-variance optimization.
+  
+  \item \textbf{Sample period sensitivity}: The 2020--2025 period included the COVID-19 crash, an unprecedented fiscal response, and the fastest Fed tightening cycle in decades. Results from this period may not generalize to more typical market environments.
+  
+  \item \textbf{Constrained optimization}: The no-short-sale constraint, while realistic for most individual investors, excludes potentially valuable hedging strategies and reduces the feasible set of portfolios.
+\end{enumerate}
+
+## Implications for Portfolio Construction
+
+Rather than prescribing specific allocations, this analysis suggests several considerations for investors evaluating similar portfolios:
+
+```{r}
+implications <- data.frame(
+  Objective = c("Minimize volatility", 
+                "Maximize risk-adjusted return", 
+                "Balance simplicity and efficiency",
+                "Preserve capital"),
+  Consideration = c("GMVP concentrates in lower-beta assets (VWO, VIG); excludes highest-returning asset (VTI)",
+                    "Tangency portfolio concentrates heavily in VTI (~89%); involves significant single-asset risk",
+                    "Equal-weight provides diversification but results in uneven risk contributions",
+                    "Combining tangency portfolio with risk-free assets reduces volatility for any target return"),
+  Tradeoff = c("Lower expected return",
+               "Concentrated risk exposure",
+               "Suboptimal risk-adjusted return",
+               "Requires access to competitive risk-free rates")
+)
+kable(implications, 
+      caption = "Portfolio Construction Considerations",
+      col.names = c("Investor Objective", "Analytical Finding", "Associated Tradeoff"))
+```
+
+## Limitations
+
+\begin{enumerate}
+  \item \textbf{Historical returns are not indicative of future performance}: The U.S. equity outperformance observed in this sample may not persist. International and emerging market equities have outperformed U.S. equities in prior decades.
+  
+  \item \textbf{Model assumptions may not hold}: Mean-variance optimization assumes returns are normally distributed and that investors care only about mean and variance. In practice, skewness, kurtosis, and tail risk may also matter.
+  
+  \item \textbf{Transaction costs and taxes are ignored}: Implementing the portfolios described would involve trading costs and potential tax consequences that reduce realized returns.
+  
+  \item \textbf{Static analysis}: This analysis uses full-sample estimates and does not account for how an investor updating estimates in real-time would have fared.
+  
+  \item \textbf{Limited asset universe}: Five ETFs represent a narrow slice of investable assets. Expanding the universe might reveal superior diversification opportunities.
+\end{enumerate}
+
+## Concluding Remarks
+
+This project demonstrates the application of quantitative portfolio analysis techniques---including return estimation, mean-variance optimization, risk budgeting, and capital allocation---to a practical investment universe. The results highlight both the power and the limitations of these methods: while they provide a rigorous framework for evaluating risk-return tradeoffs, they are sensitive to estimation error, model assumptions, and the specific historical period analyzed. **The analytical framework presented here is intended as a demonstration of portfolio-theory techniques, not as investment advice.**
